@@ -1,0 +1,48 @@
+const mongoose = require('mongoose');
+const userSchema = new mongoose.Schema(
+    {
+        name: {
+            type: String,
+            required: [true, 'Le nom est obligatoire'],
+            trim: true
+        },
+        email: {
+            type: String,
+            required: [true, "L'email est obligatoire"],
+            unique: true,
+            lowercase: true,
+            trim: true,
+            match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, "Format d'email invalide (ex: sou@polytechnique.tn)"]
+        },
+        password : {
+            type : String ,
+            required : [true , 'Le mot de passe est obligatoire '],
+            minlength : [6 , 'Le mot de passe doit comporter au moins 6 caracteres ']
+            },
+        age: {
+            type: Number,
+            min: [4, "L'age minimum autorise est de 4 ans"]
+        },
+        role: {
+            type: String,
+            enum: {
+                values: ['user', 'admin'],
+                message: "{VALUE} n'est pas un role autorise"
+            },
+            default: 'user'
+        },
+        bio: {
+            type: String,
+            trim: true,
+            maxlength: [200, 'La biographie ne peut pas depasser 200 caracteres']
+        },
+        phone: {
+            type: String,
+            trim: true,
+            match: [/^\d{8}$/, 'Numero de 8 chiffres requis']
+        }
+    },
+    { timestamps: true } // Ajoute automatiquement createdAt et updatedAt
+);
+
+module.exports = mongoose.model('User', userSchema);

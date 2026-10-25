@@ -1,48 +1,233 @@
-﻿const { estNonVide, estEmailValide } = require('../utils/validators');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const User = require('../models/userModel');
 
-const users = [
-  { id: 1, name: 'Aya', email: 'aya@example.com' },
-  { id: 2, name: 'Ali', email: 'ali@example.com' },
-  { id: 3, name: 'Youssef', email: 'youssef@example.com' },
-];
-let prochainId = 4;
-
-const getAllUsers = (req, res) => {
-  const { name } = req.query;
-  const resultat = name ? users.filter((user) => user.name === name) : users;
-  res.status(200).json(resultat);
+// Utilitaire de génération de Token JWT
+const generateToken = (id, role) => {
+    return jwt.sign({ id, role }, process.env.JWT_SECRET, {
+        expiresIn: '1d'
+    });
 };
 
-const getUserById = (req, res) => {
-  const id = Number(req.params.id);
-  const user = users.find((item) => item.id === id);
+// POST /api/users/register (Inscription)
+const registerUser = async (req, res) => {
+    try {
+        const { name, email, password, age, role } = req.body;
 
-  if (!user) {
-    return res.status(404).json({ error: `Utilisateur ${id} introuvable` });
-  }
+        if (!name || !email || !password) {
+            return res.status(400).json({
+                message: 'Nom, email et mot de passe requis'
+            });
+        }
 
-  res.status(200).json(user);
+        const userExists = await User.findOne({ email });
+
+        if (userExists) {
+            return res.status(409).json({
+                message: 'Cet email est déjà utilisé'
+            });
+        }
+
+        // Hachage sécurisé avec sel (Salt factor = 10)
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        // Protection contre l'escalade de privilèges :
+        // le rôle 'admin' ne peut jamais être obtenu par inscription publique
+        const user = await User.create({
+            name,
+            email,
+            password: hashedPassword,
+            age,
+            role: 'user'
+        });
+
+        res.status(201).json({
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            token: generateToken(user._id, user.role)
+        });
+
+    } catch (err) {
+        if (err.name === 'ValidationError') {
+            return res.status(400).json({
+                message: err.message
+            });
+        }
+
+        res.status(500).json({
+            message: err.message
+        });
+    }
 };
 
-const createUser = (req, res) => {
-  const { name, email } = req.body;
+// POST /api/users/login
+const loginUser = async (req, res) => {
+    try {
+        const { email, password } = req.body;
 
-  if (!estNonVide(name)) {
-    return res.status(400).json({ error: 'Le nom est obligatoire' });
-  }
+        if (!email || !password) {
+            return res.status(400).json({
+                message: 'Email et mot de passe requis'
+            });
+        }
 
-  if (!estEmailValide(email)) {
-    return res.status(400).json({ error: "L'adresse email est invalide" });
-  }
+        const user = await User.findOne({ email });
 
-  const nouvelUtilisateur = {
-    id: prochainId++,
-    name: name.trim(),
-    email: email.trim(),
-  };
-  users.push(nouvelUtilisateur);
+        if (!user) {
+            return res.status(401).json({
+                message: 'Identifiants invalides'
+            });
+        }
 
-  res.status(201).json({ message: 'Utilisateur créé', user: nouvelUtilisateur });
+        // Comparaison sécurisée du mot de passe
+        const isMatch = await bcrypt.compare(password, user.password);
+
+        if (!isMatch) {
+            return res.status(401).json({
+                message: 'Identifiants invalides'
+            });
+        }
+
+        res.status(200).json({
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            token: generateToken(user._id, user.role)
+        });
+
+    } catch (err) {
+        res.status(500).json({
+            message: err.message
+        });
+    }
 };
 
-module.exports = { getAllUsers, getUserById, createUser };
+// GET /api/users/profile (Profil protégé)
+const getUserProfile = async (req, res) => {
+    try {
+        res.status(200).json(req.user);
+    } catch (err) {
+        res.status(500).json({
+            message: err.message
+        });
+    }
+};
+
+// GET /api/users (Admin uniquement)
+const getAllUsers = async (req, res) => {
+    try {
+        const users = await User.find().select('-password');
+
+        res.status(200).json(users);
+
+    } catch (err) {
+        res.status(500).json({
+            message: err.message
+        });
+    }
+};
+
+// PUT /api/users/update-password (Mise à jour sécurisée du mot de passe)
+const updatePassword = async (req, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body;
+
+        if (!oldPassword || !newPassword) {
+            return res.status(400).json({
+                message: 'Ancien et nouveau mot de passe requis'
+            });
+        }
+
+        // req.user est injecté par protect, mais sans le champ password
+        const user = await User.findById(req.user._id);
+
+        if (!user) {
+            return res.status(404).json({
+                message: 'Utilisateur non trouvé'
+            });
+        }
+
+        const isMatch = await bcrypt.compare(oldPassword, user.password);
+
+        if (!isMatch) {
+            return res.status(401).json({
+                message: 'Ancien mot de passe incorrect'
+            });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({
+                message: 'Le mot de passe doit comporter au moins 6 caracteres'
+            });
+        }
+
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(newPassword, salt);
+
+        await user.save();
+
+        res.status(200).json({
+            message: 'Mot de passe mis a jour avec succes'
+        });
+
+    } catch (err) {
+        res.status(500).json({
+            message: err.message
+        });
+    }
+};
+
+// PUT /api/users/:id/role (Attribution de rôle - Admin uniquement)
+const updateUserRole = async (req, res) => {
+    try {
+        const { role } = req.body;
+
+        if (!['user', 'admin'].includes(role)) {
+            return res.status(400).json({
+                message: "Role invalide : 'user' ou 'admin' attendu"
+            });
+        }
+
+        const user = await User.findById(req.params.id);
+
+        if (!user) {
+            return res.status(404).json({
+                message: 'Utilisateur non trouvé'
+            });
+        }
+
+        user.role = role;
+        await user.save();
+
+        res.status(200).json({
+            _id: user._id,
+            name: user.name,
+            email: user.email,
+            role: user.role
+        });
+
+    } catch (err) {
+        if (err.name === 'CastError') {
+            return res.status(400).json({
+                message: 'Identifiant invalide'
+            });
+        }
+
+        res.status(500).json({
+            message: err.message
+        });
+    }
+};
+
+module.exports = {
+    registerUser,
+    loginUser,
+    getUserProfile,
+    getAllUsers,
+    updatePassword,
+    updateUserRole
+};

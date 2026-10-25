@@ -1,12 +1,27 @@
-﻿const express = require('express');
+const express = require('express');
 const router = express.Router();
-const articleController = require('../controller/articleController');
+const {
+    getAllArticles,
+    getArticleById,
+    getMyArticles,
+    createArticle,
+    updateArticle,
+    deleteArticle
+} = require('../controller/articleController');
 
-// Le préfixe /api/articles est défini dans server.js.
-router.get('/', articleController.getAllArticles);
-router.get('/:id', articleController.getArticleById);
-router.post('/', articleController.createArticle);
-router.put('/:id', articleController.updateArticle);
-router.delete('/:id', articleController.deleteArticle);
+const { protect } = require('../middlewares/authMiddleware');
+
+// Consultation publique
+router.get('/', getAllArticles);
+
+// articles de l'utilisateur connecte (avant /:id)
+router.get('/my-articles', protect, getMyArticles);
+
+router.get('/:id', getArticleById);
+
+// Operations d'ecriture protegees par authentification JWT
+router.post('/', protect, createArticle);
+router.put('/:id', protect, updateArticle);
+router.delete('/:id', protect, deleteArticle);
 
 module.exports = router;
